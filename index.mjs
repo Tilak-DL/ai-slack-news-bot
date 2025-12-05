@@ -98,6 +98,73 @@ function toHnUrl(item) {
   return item.url || `https://news.ycombinator.com/item?id=${item.id}`;
 }
 
+function getDomain(url) {
+  if (!url) return 'news.ycombinator.com';
+  try {
+    const domain = new URL(url).hostname.replace('www.', '');
+    return domain;
+  } catch {
+    return 'news.ycombinator.com';
+  }
+}
+
+function formatSlackBlocks(stories) {
+  const today = new Date().toLocaleDateString('en-IN', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+
+  const blocks = [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: `🤖 Daily AI Updates & New Tools — ${today}`,
+        emoji: true,
+      },
+    },
+    {
+      type: 'divider',
+    },
+  ];
+
+  if (!stories.length) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: 'No AI-related stories found today.',
+      },
+    });
+    return blocks;
+  }
+
+  stories.forEach((story, index) => {
+    const url = toHnUrl(story);
+    const domain = getDomain(story.url);
+    const comments = story.descendants || 0;
+    
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*${index + 1}. ${story.title}*\n<${url}|${domain}>${comments > 0 ? ` • ${comments} comments` : ''}`,
+      },
+    });
+    
+    // Add divider between items (except after last one)
+    if (index < stories.length - 1) {
+      blocks.push({
+        type: 'divider',
+      });
+    }
+  });
+
+  return blocks;
+}
+
+// Keep text format as fallback
 function formatSlackText(stories) {
   const today = new Date().toLocaleDateString('en-IN', {
     year: 'numeric',
@@ -109,15 +176,25 @@ function formatSlackText(stories) {
     return `🤖 *Daily AI Updates & New Tools — ${today}*\n\nNo AI-related stories found today.`;
 
   return `🤖 *Daily AI Updates & New Tools — ${today}*\n\n${stories
-    .map((s, i) => `*${i + 1}. <${toHnUrl(s)}|${s.title}>* (${s.score} points)`)
+    .map((s, i) => {
+      const url = toHnUrl(s);
+      const domain = getDomain(s.url);
+      return `*${i + 1}. <${url}|${s.title}>*\n<${url}|${domain}>`;
+    })
     .join('\n\n')}`;
 }
 
-async function postToSlack(text) {
+async function postToSlack(blocks) {
+  const payload = {
+    blocks,
+    // Also include text for notifications/fallback
+    text: `Daily AI Updates & New Tools`,
+  };
+
   const res = await fetch(SLACK_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -127,6 +204,6 @@ async function postToSlack(text) {
 
 (async () => {
   const stories = await getAiStories();
-  const text = formatSlackText(stories);
-  await postToSlack(text);
+  const blocks = formatSlackBlocks(stories);
+  await postToSlack(blocks);
 })();
