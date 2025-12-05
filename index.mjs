@@ -108,7 +108,64 @@ function getDomain(url) {
   }
 }
 
-function formatSlackBlocks(stories) {
+async function fetchMetadata(url) {
+  if (!url || url.startsWith('https://news.ycombinator.com')) {
+    return { image: null, description: null };
+  }
+
+  try {
+    // Fetch with timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+    
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; SlackBot/1.0)',
+      },
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!res.ok) return { image: null, description: null };
+    
+    const html = await res.text();
+    
+    // Extract Open Graph image
+    const ogImageMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta\s+name=["']twitter:image["']\s+content=["']([^"']+)["']/i);
+    const image = ogImageMatch ? ogImageMatch[1] : null;
+    
+    // Extract Open Graph description
+    const ogDescMatch = html.match(/<meta\s+property=["']og:description["']\s+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta\s+name=["']twitter:description["']\s+content=["']([^"']+)["']/i);
+    let description = ogDescMatch ? ogDescMatch[1] : null;
+    
+    // Clean up description (remove HTML entities, limit length)
+    if (description) {
+      description = description
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&#39;/g, "'")
+        .trim();
+      
+      // Limit to 200 characters
+      if (description.length > 200) {
+        description = description.substring(0, 197) + '...';
+      }
+    }
+    
+    return { image, description };
+  } catch (error) {
+    // Silently fail - return no metadata
+    return { image: null, description: null };
+  }
+}
+
+async function formatSlackBlocks(stories) {
   const today = new Date().toLocaleDateString('en-IN', {
     year: 'numeric',
     month: 'short',
@@ -140,18 +197,39 @@ function formatSlackBlocks(stories) {
     return blocks;
   }
 
+  // Fetch metadata for all stories in parallel
+  const metadataPromises = stories.map(story => fetchMetadata(toHnUrl(story)));
+  const metadataList = await Promise.all(metadataPromises);
+
   stories.forEach((story, index) => {
     const url = toHnUrl(story);
     const domain = getDomain(story.url);
-    const comments = story.descendants || 0;
+    const metadata = metadataList[index];
+    
+    // Build text with title and domain
+    let text = `*${index + 1}. ${story.title}*\n<${url}|${domain}>`;
+    
+    // Add description if available
+    if (metadata.description) {
+      text += `\n_${metadata.description}_`;
+    }
     
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${index + 1}. ${story.title}*\n<${url}|${domain}>${comments > 0 ? ` • ${comments} comments` : ''}`,
+        text: text,
       },
     });
+    
+    // Add image if available
+    if (metadata.image) {
+      blocks.push({
+        type: 'image',
+        image_url: metadata.image,
+        alt_text: story.title,
+      });
+    }
     
     // Add divider between items (except after last one)
     if (index < stories.length - 1) {
@@ -164,7 +242,7 @@ function formatSlackBlocks(stories) {
   return blocks;
 }
 
-// Keep text format as fallback
+// Keep text format as fallback (not used, but kept for reference)
 function formatSlackText(stories) {
   const today = new Date().toLocaleDateString('en-IN', {
     year: 'numeric',
@@ -204,6 +282,6 @@ async function postToSlack(blocks) {
 
 (async () => {
   const stories = await getAiStories();
-  const blocks = formatSlackBlocks(stories);
+  const blocks = await formatSlackBlocks(stories);
   await postToSlack(blocks);
 })();
