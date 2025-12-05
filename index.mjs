@@ -6,25 +6,30 @@ const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 
 // Keywords to detect AI-related posts
 const KEYWORDS = [
-  'ai',
-  'artificial intelligence',
-  'machine learning',
-  'ml',
-  'deep learning',
-  'llm',
-  'openai',
-  'anthropic',
-  'llama',
-  'chatgpt',
-  'gemini',
-  'mistral',
-  'gpt-',
+    'artificial intelligence',
+    'machine learning',
+    'deep learning',
+    'neural network',
+    'neural nets',
+    'generative ai',
+    'gen ai',
+    'llm',
+    'large language model',
+    'chatgpt',
+    'gpt-',
+    'openai',
+    'anthropic',
+    'mistral',
+    'llama',
+    'state of ai',
+    'transformer model',
 ];
 
 function isAiRelated(title = '', url = '') {
-  const text = (title + ' ' + url).toLowerCase();
-  return KEYWORDS.some(k => text.includes(k.toLowerCase()));
-}
+    const text = (title + ' ' + url).toLowerCase();
+
+    return KEYWORDS.some(k => text.includes(k.toLowerCase()));
+} 
 
 async function fetchTopStoriesIds(limit = 80) {
   const res = await fetch(HN_TOP_STORIES_URL);
