@@ -197,9 +197,21 @@ async function formatSlackBlocks(stories) {
     return blocks;
   }
 
-  // Fetch metadata for all stories in parallel
-  const metadataPromises = stories.map(story => fetchMetadata(toHnUrl(story)));
-  const metadataList = await Promise.all(metadataPromises);
+  // Fetch metadata for all stories in parallel with timeout
+  const metadataPromises = stories.map(story => 
+    Promise.race([
+      fetchMetadata(toHnUrl(story)),
+      new Promise(resolve => setTimeout(() => resolve({ image: null, description: null }), 5000))
+    ])
+  );
+  
+  let metadataList;
+  try {
+    metadataList = await Promise.all(metadataPromises);
+  } catch (error) {
+    console.error('Error fetching metadata, continuing without it:', error.message);
+    metadataList = stories.map(() => ({ image: null, description: null }));
+  }
 
   stories.forEach((story, index) => {
     const url = toHnUrl(story);
@@ -214,22 +226,25 @@ async function formatSlackBlocks(stories) {
       text += `\n_${metadata.description}_`;
     }
     
-    blocks.push({
+    // Create section block
+    const sectionBlock = {
       type: 'section',
       text: {
         type: 'mrkdwn',
         text: text,
       },
-    });
+    };
     
-    // Add image if available
+    // Add image as accessory if available (Slack webhooks support this better)
     if (metadata.image) {
-      blocks.push({
+      sectionBlock.accessory = {
         type: 'image',
         image_url: metadata.image,
         alt_text: story.title,
-      });
+      };
     }
+    
+    blocks.push(sectionBlock);
     
     // Add divider between items (except after last one)
     if (index < stories.length - 1) {
@@ -263,25 +278,54 @@ function formatSlackText(stories) {
 }
 
 async function postToSlack(blocks) {
+  if (!SLACK_WEBHOOK_URL) {
+    console.error('SLACK_WEBHOOK_URL is not set');
+    return;
+  }
+
   const payload = {
     blocks,
     // Also include text for notifications/fallback
     text: `Daily AI Updates & New Tools`,
   };
 
-  const res = await fetch(SLACK_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const res = await fetch(SLACK_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-  if (!res.ok) {
-    console.log(await res.text());
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error('Slack API error:', res.status, errorText);
+      console.error('Payload:', JSON.stringify(payload, null, 2));
+    } else {
+      console.log('Successfully posted to Slack');
+    }
+  } catch (error) {
+    console.error('Error posting to Slack:', error.message);
+    throw error;
   }
 }
 
 (async () => {
-  const stories = await getAiStories();
-  const blocks = await formatSlackBlocks(stories);
-  await postToSlack(blocks);
+  try {
+    console.log('Starting AI news bot...');
+    const stories = await getAiStories();
+    console.log(`Found ${stories.length} AI stories`);
+    
+    if (stories.length === 0) {
+      console.log('No stories found, posting empty message');
+    }
+    
+    const blocks = await formatSlackBlocks(stories);
+    console.log(`Formatted ${blocks.length} blocks`);
+    
+    await postToSlack(blocks);
+    console.log('Done!');
+  } catch (error) {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  }
 })();
