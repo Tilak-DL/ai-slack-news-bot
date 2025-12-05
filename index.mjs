@@ -91,7 +91,7 @@ async function getAiStories() {
   const aiStories = items
     .filter(item => item?.title && isAiRelated(item.title, item.url))
     .sort((a, b) => (b.score || 0) - (a.score || 0));
-  return aiStories.slice(0, 10); // Return top 10 AI stories
+  return aiStories.slice(0, 5); // Return top 5 AI stories
 }
 
 function toHnUrl(item) {
