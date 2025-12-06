@@ -67,10 +67,71 @@ const KEYWORDS = [
     'state of ai',
 ];
 
-function isAiRelated(title = '', url = '') {
+/**
+ * Calculate AI relevance score for a story
+ * Returns a score from 0-100, where higher = more AI-relevant
+ */
+function calculateAiRelevanceScore(title = '', url = '') {
     const text = (title + ' ' + url).toLowerCase();
+    
+    // Strong AI signals (high weight)
+    const strongSignals = [
+        'gpt-', 'chatgpt', 'openai', 'anthropic', 'claude',
+        'llm', 'large language model', 'gemini', 'mistral', 'llama',
+        'perplexity', 'midjourney', 'dall-e', 'sora', 'runway',
+        'cursor', 'github copilot', 'ai copilot',
+        'artificial intelligence', 'generative ai', 'gen ai',
+        'ai tool', 'ai app', 'ai platform', 'ai agent', 'ai assistant'
+    ];
+    
+    // Medium AI signals
+    const mediumSignals = [
+        'ai update', 'ai release', 'ai launch', 'ai announcement',
+        'multimodal', 'autonomous agent', 'reasoning'
+    ];
+    
+    // Weak AI signals (can have false positives)
+    const weakSignals = ['ai', 'machine learning', 'ml', 'deep learning'];
+    
+    let score = 0;
+    
+    // Check strong signals (worth 30 points each)
+    for (const signal of strongSignals) {
+        if (text.includes(signal.toLowerCase())) {
+            score += 30;
+            // If we have a strong signal, we're confident it's AI-related
+            if (score >= 30) return Math.min(100, score);
+        }
+    }
+    
+    // Check medium signals (worth 15 points each)
+    for (const signal of mediumSignals) {
+        if (text.includes(signal.toLowerCase())) {
+            score += 15;
+        }
+    }
+    
+    // Check weak signals (worth 5 points each, but require word boundaries for "ai")
+    for (const signal of weakSignals) {
+        if (signal === 'ai') {
+            // Use word boundary regex to avoid false positives like "said", "paid", etc.
+            const aiRegex = /\bai\b/i;
+            if (aiRegex.test(text)) {
+                score += 5;
+            }
+        } else if (text.includes(signal.toLowerCase())) {
+            score += 5;
+        }
+    }
+    
+    return Math.min(100, score);
+}
 
-    return KEYWORDS.some(k => text.includes(k.toLowerCase()));
+/**
+ * Check if story is AI-related (score threshold)
+ */
+function isAiRelated(title = '', url = '') {
+    return calculateAiRelevanceScore(title, url) >= 10;
 } 
 
 async function fetchTopStoriesIds(limit = 80) {
@@ -85,13 +146,49 @@ async function fetchItem(id) {
 }
 
 async function getAiStories() {
-  const ids = await fetchTopStoriesIds(100); // Check more stories for better coverage
+  const ids = await fetchTopStoriesIds(100);
   const items = await Promise.all(ids.map(fetchItem));
-  // Sort by score (highest first) to get the most relevant/trending stories
-  const aiStories = items
-    .filter(item => item?.title && isAiRelated(item.title, item.url))
-    .sort((a, b) => (b.score || 0) - (a.score || 0));
-  return aiStories.slice(0, 5); // Return top 5 AI stories
+  
+  // Filter for recent stories only (last 24 hours for daily updates)
+  const now = Math.floor(Date.now() / 1000);
+  const twentyFourHoursAgo = now - (24 * 60 * 60);
+  
+  // Calculate relevance scores and filter
+  const scoredStories = items
+    .map(item => {
+      if (!item?.title) return null;
+      
+      const relevanceScore = calculateAiRelevanceScore(item.title, item.url);
+      const isRecent = !item.time || item.time >= twentyFourHoursAgo;
+      
+      return {
+        ...item,
+        relevanceScore,
+        isRecent,
+      };
+    })
+    .filter(item => {
+      if (!item) return false;
+      // Must have minimum relevance score
+      if (item.relevanceScore < 10) return false;
+      // Must be recent (within last 24 hours)
+      if (!item.isRecent) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      // Primary: Relevance score (higher = more AI-focused)
+      const relevanceDiff = b.relevanceScore - a.relevanceScore;
+      if (Math.abs(relevanceDiff) > 5) return relevanceDiff;
+      
+      // Secondary: HN score (trending stories)
+      const scoreDiff = (b.score || 0) - (a.score || 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      
+      // Tertiary: Recency (newer stories first)
+      return (b.time || 0) - (a.time || 0);
+    });
+  
+  return scoredStories.slice(0, 5);
 }
 
 function toHnUrl(item) {
